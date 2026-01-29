@@ -1,3 +1,5 @@
+<img width="1910" height="221" alt="Bildschirmfoto 2026-01-29 um 18 29 48" src="https://github.com/user-attachments/assets/d8589173-c509-42e1-8494-6f0393c33b70" />
+
 # Explainable predictive process analysis based on sequence encoding
 
 A comprehensive framework for **Explainable AI (XAI)** in **Process Mining**, comparing 15 explanation methods across 7 model architectures on process duration prediction tasks.
