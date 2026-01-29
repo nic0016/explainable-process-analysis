@@ -1,6 +1,6 @@
 # Explainable Process Analysis
 
-A comprehensive framework for **Explainable AI (XAI)** in **Process Mining**, comparing 17 explanation methods across 7 model architectures on process duration prediction tasks.
+A comprehensive framework for **Explainable AI (XAI)** in **Process Mining**, comparing 15 explanation methods across 7 model architectures on process duration prediction tasks.
 
 ## Overview
 
@@ -8,7 +8,7 @@ This project provides:
 
 - **Data Pipeline**: Load and encode XES event logs for ML models
 - **7 Model Architectures**: XGBoost, ResNet, TCN, BiLSTM, BERT, GPT, TFT
-- **17 XAI Methods**: Occlusion, LIME, SHAP, Integrated Gradients, Attention methods, and more
+- **15 XAI Methods**: Occlusion, LIME, SHAP, Integrated Gradients, Attention methods, and more
 - **12 Evaluation Metrics**: Faithfulness, Robustness, and Complexity measures
 - **Benchmark Scripts**: Systematic evaluation across datasets and models
 
@@ -21,6 +21,7 @@ explainable-process-analysis/
 │   ├── static_features.py   # Static attribute extraction
 │   └── ENCODING.md          # Encoding documentation
 ├── models/                  # Neural network architectures
+│   ├── xgboost_regressor.py # XGBoost wrapper
 │   ├── resnet1d.py          # 1D ResNet
 │   ├── tcn.py               # Temporal Convolutional Network
 │   ├── bilstm.py            # Bidirectional LSTM
@@ -28,7 +29,7 @@ explainable-process-analysis/
 │   ├── gpt_causal.py        # GPT-style Transformer
 │   └── tft_light.py         # Temporal Fusion Transformer
 ├── xai/                     # Explainability methods
-│   ├── methods.py           # 17 attribution methods
+│   ├── methods.py           # 15 attribution methods
 │   └── metrics.py           # Evaluation metrics
 ├── training/                # Training utilities
 │   └── trainers.py          # Model training functions
@@ -164,19 +165,14 @@ metrics = compute_all_metrics(
 - **IxG**: Input × Gradient
 - **GB**: Guided Backprop
 - **IG**: Integrated Gradients
-- **EG**: Expected Gradients
+- **GS**: GradientSHAP
 - **DL**: DeepLIFT
 - **DLS**: DeepLIFT SHAP
 - **LRP**: Layer-wise Relevance Propagation
 
-### CAM (CNNs only)
-- **GC**: GradCAM
-- **SC**: ScoreCAM
-- **GC++**: GradCAM++
-
 ### Attention (Transformers only)
 - **RA**: Raw Attention
-- **RoA**: Rollout Attention
+- **RoA**: Attention Rollout
 - **LA**: LRP Attention
 
 ## Evaluation Metrics
@@ -214,11 +210,11 @@ python scripts/run_benchmark_static.py
 If you use this framework, please cite:
 
 ```bibtex
-@thesis{wormann2026xai,
-  title={Explainable AI for Process Mining: A Comparative Study},
-  author={Wormann, Nico},
+@thesis{woermann2026explainable,
+  title={Explainable Predictive Process Analysis Based on Sequence Encoding},
+  author={Wörmann, Nicolas},
   year={2026},
-  school={Your University}
+  school={Ludwig-Maximilians-Universität München}
 }
 ```
 

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from typing import Union
 from captum.attr import (
     IntegratedGradients, Saliency, InputXGradient, GuidedBackprop,
-    DeepLift, DeepLiftShap, GradientShap, LayerGradCam, LRP as CaptumLRP
+    DeepLift, DeepLiftShap, GradientShap, LRP as CaptumLRP
 )
 import shap
 
@@ -168,8 +168,8 @@ def integrated_gradients(model: nn.Module, x: torch.Tensor, baseline: torch.Tens
     return attr.detach().cpu().numpy()
 
 
-def expected_gradients(model: nn.Module, x: torch.Tensor, background: torch.Tensor,
-                       n_samples: int = 50, target_idx: int = 0) -> np.ndarray:
+def gradient_shap(model: nn.Module, x: torch.Tensor, background: torch.Tensor,
+                  n_samples: int = 50, target_idx: int = 0) -> np.ndarray:
     gs = GradientShap(model)
     attr = gs.attribute(x, baselines=background, n_samples=n_samples,
                         target=target_idx if x.dim() > 1 else None)
@@ -206,101 +206,6 @@ def lrp(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
         return attr.detach().cpu().numpy()
     except Exception:
         return integrated_gradients(model, x, target_idx=target_idx)
-
-
-def gradcam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
-            target_idx: int = 0) -> np.ndarray:
-    gc = LayerGradCam(model, target_layer)
-    attr = gc.attribute(x, target=target_idx if x.dim() > 1 else None)
-    interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
-    attr = F.interpolate(attr, size=x.shape[2:], mode=interpolate_mode, align_corners=False)
-    return attr.detach().cpu().numpy()
-
-
-def scorecam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
-             target_idx: int = 0) -> np.ndarray:
-    model.eval()
-    activations = []
-    interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
-    
-    def hook_fn(module, input, output):
-        activations.append(output.detach())
-    
-    handle = target_layer.register_forward_hook(hook_fn)
-    with torch.no_grad():
-        output = model(x)
-        baseline_score = output[0, target_idx] if output.dim() > 1 else output[0]
-    handle.remove()
-    
-    if not activations:
-        return np.zeros_like(x.detach().cpu().numpy())
-    
-    acts = activations[0]
-    n_channels = acts.shape[1]
-    weights = torch.zeros(n_channels, device=x.device)
-    
-    for c in range(n_channels):
-        mask = F.interpolate(acts[:, c:c+1], size=x.shape[2:], mode=interpolate_mode, align_corners=False)
-        mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
-        masked_input = x * mask
-        with torch.no_grad():
-            masked_output = model(masked_input)
-            score = masked_output[0, target_idx] if masked_output.dim() > 1 else masked_output[0]
-        weights[c] = score - baseline_score
-    
-    weights = F.relu(weights)
-    cam = torch.zeros(x.shape[2:], device=x.device)
-    for c in range(n_channels):
-        cam += weights[c] * F.interpolate(acts[:, c:c+1], size=x.shape[2:], 
-                                          mode=interpolate_mode, align_corners=False)[0, 0]
-    
-    cam = F.relu(cam)
-    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    return cam.unsqueeze(0).unsqueeze(0).detach().cpu().numpy()
-
-
-def gradcam_pp(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
-               target_idx: int = 0) -> np.ndarray:
-    model.eval()
-    activations = []
-    gradients = []
-    interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
-    
-    def forward_hook(module, input, output):
-        activations.append(output)
-    
-    def backward_hook(module, grad_input, grad_output):
-        gradients.append(grad_output[0])
-    
-    fh = target_layer.register_forward_hook(forward_hook)
-    bh = target_layer.register_full_backward_hook(backward_hook)
-    
-    output = model(x)
-    score = output[0, target_idx] if output.dim() > 1 else output[0]
-    model.zero_grad()
-    score.backward(retain_graph=True)
-    
-    fh.remove()
-    bh.remove()
-    
-    if not activations or not gradients:
-        return np.zeros_like(x.detach().cpu().numpy())
-    
-    acts = activations[0]
-    grads = gradients[0]
-    
-    grads_power_2 = grads ** 2
-    grads_power_3 = grads ** 3
-    sum_acts = torch.sum(acts, dim=(2, 3) if acts.dim() == 4 else (2,), keepdim=True)
-    alpha = grads_power_2 / (2 * grads_power_2 + sum_acts * grads_power_3 + 1e-8)
-    weights = torch.sum(alpha * F.relu(grads), dim=(2, 3) if acts.dim() == 4 else (2,), keepdim=True)
-    
-    cam = torch.sum(weights * acts, dim=1, keepdim=True)
-    cam = F.relu(cam)
-    cam = F.interpolate(cam, size=x.shape[2:], mode=interpolate_mode, align_corners=False)
-    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    
-    return cam.detach().cpu().numpy()
 
 
 def _prepare_transformer_input(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
@@ -447,8 +352,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
         except StopIteration:
             pass
     
-    has_embedding = hasattr(model, 'embedding') and isinstance(model.embedding, nn.Embedding)
-    
     if method == 'OC':
         return occlusion(model, x if isinstance(x, np.ndarray) else x.detach().cpu().numpy(), **kwargs)
     elif method == 'LIM':
@@ -515,9 +418,9 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
                 result = guided_backprop(model, x)
             elif method == 'IG':
                 result = integrated_gradients(model, x, **kwargs)
-            elif method == 'EG':
+            elif method == 'GS':
                 background = kwargs.get('background', torch.zeros_like(x).expand(10, *x.shape[1:]))
-                result = expected_gradients(model, x, background=background, **kwargs)
+                result = gradient_shap(model, x, background=background, **kwargs)
             elif method == 'DL':
                 result = deeplift(model, x, **kwargs)
             elif method == 'DLS':
@@ -525,15 +428,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
                 result = deeplift_shap(model, x, background=background)
             elif method == 'LRP':
                 result = lrp(model, x)
-            elif model_type == 'cnn' and 'target_layer' in kwargs:
-                if method == 'GC':
-                    result = gradcam(model, x, target_layer=kwargs['target_layer'])
-                elif method == 'SC':
-                    result = scorecam(model, x, target_layer=kwargs['target_layer'])
-                elif method == 'GC++':
-                    result = gradcam_pp(model, x, target_layer=kwargs['target_layer'])
-                else:
-                    result = np.zeros(x.detach().cpu().numpy().shape)
             else:
                 result = np.zeros(x.detach().cpu().numpy().shape)
             
@@ -547,8 +441,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
     
     if model_type == 'tree' and method == 'TS':
         try:
-            import re
-            
             def flatten_to_floats(obj):
                 result = []
                 if hasattr(obj, 'values'):
@@ -584,17 +476,16 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
 
 
 METHODS_BY_TYPE = {
-    'transformer': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'EG', 'DL', 'DLS', 'LRP', 'RA', 'RoA', 'LA'],
-    'cnn': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'EG', 'DL', 'DLS', 'LRP', 'GC', 'SC', 'GC++'],
-    'rnn': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'EG', 'DL', 'DLS', 'LRP'],
+    'transformer': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'GS', 'DL', 'DLS', 'LRP', 'RA', 'RoA', 'LA'],
+    'cnn': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'GS', 'DL', 'DLS', 'LRP'],
+    'rnn': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'GS', 'DL', 'DLS', 'LRP'],
     'tree': ['OC', 'LIM', 'KS', 'TS']
 }
 
 METHOD_NAMES = {
     'OC': 'Occlusion', 'LIM': 'LIME', 'KS': 'Kernel SHAP', 'TS': 'TreeSHAP',
     'VG': 'Vanilla Gradient', 'IxG': 'Input×Gradient', 'GB': 'Guided Backprop',
-    'IG': 'Integrated Gradients', 'EG': 'Expected Gradients',
+    'IG': 'Integrated Gradients', 'GS': 'GradientSHAP',
     'DL': 'DeepLIFT', 'DLS': 'DeepLIFT SHAP', 'LRP': 'LRP',
-    'GC': 'GradCAM', 'SC': 'ScoreCAM', 'GC++': 'GradCAM++',
-    'RA': 'Raw Attention', 'RoA': 'Rollout Attention', 'LA': 'LRP Attention'
+    'RA': 'Raw Attention', 'RoA': 'Attention Rollout', 'LA': 'LRP Attention'
 }
