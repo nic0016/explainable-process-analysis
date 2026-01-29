@@ -1,4 +1,4 @@
-# Explainable Process Analysis
+# Explainable predictive process analysis based on sequence encoding
 
 A comprehensive framework for **Explainable AI (XAI)** in **Process Mining**, comparing 15 explanation methods across 7 model architectures on process duration prediction tasks.
 
