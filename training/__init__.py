@@ -1,5 +1,3 @@
-"""Training utilities for all models."""
-
 from .trainers import (
     train_xgboost_per_epoch,
     train_resnet,

@@ -1,5 +1,3 @@
-"""Neural network models for process duration prediction."""
-
 from .resnet1d import SmallResNet1D
 from .bilstm import BiLSTMRegressor
 from .tcn import TemporalConvNet

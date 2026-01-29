@@ -1,40 +1,19 @@
-"""17 XAI attribution methods for model explanations.
-
-Includes:
-- Universal methods (work with any model): Occlusion, LIME, Kernel SHAP
-- Gradient-based methods (neural networks): Vanilla Gradient, IG, DeepLIFT, etc.
-- CAM methods (CNNs): GradCAM, ScoreCAM, GradCAM++
-- Attention methods (Transformers): Raw Attention, Rollout Attention, LRP Attention
-"""
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Callable, Optional, Union
+from typing import Union
 from captum.attr import (
     IntegratedGradients, Saliency, InputXGradient, GuidedBackprop,
-    DeepLift, DeepLiftShap, GradientShap, LayerGradCam, Occlusion as CaptumOcclusion,
-    LayerAttribution, LRP as CaptumLRP
+    DeepLift, DeepLiftShap, GradientShap, LayerGradCam, LRP as CaptumLRP
 )
 import shap
 
 
-# =============================================================================
-# UNIVERSAL METHODS (Black-Box)
-# =============================================================================
-
 def occlusion(model, x: np.ndarray, baseline: np.ndarray = None, window_size: int = None) -> np.ndarray:
-    """Occlusion-based attribution (OC). Works for any model.
-    
-    Default: Timestep-level occlusion (window_size = num_features per timestep).
-    This is ~100x faster than feature-level occlusion and semantically more meaningful
-    for sequence data (measures importance of whole events, not individual features).
-    """
     if baseline is None:
         baseline = np.zeros_like(x)
     
-    # Default: Timestep-level occlusion (occlude all features of one timestep at once)
     if window_size is None:
         window_size = x.shape[-1] if x.ndim > 1 else 1
     
@@ -43,8 +22,6 @@ def occlusion(model, x: np.ndarray, baseline: np.ndarray = None, window_size: in
     original_pred = _predict(model, x)
     attributions = np.zeros_like(x_flat)
     
-    # Batched occlusion for better performance
-    n_windows = (len(x_flat) + window_size - 1) // window_size
     occluded_batch = []
     window_ranges = []
     
@@ -55,7 +32,6 @@ def occlusion(model, x: np.ndarray, baseline: np.ndarray = None, window_size: in
         occluded_batch.append(x_occluded.reshape(x.shape))
         window_ranges.append((i, end))
     
-    # Batched prediction (much faster on GPU)
     occluded_preds = _predict_batch(model, np.stack(occluded_batch), x.shape)
     
     for idx, (i, end) in enumerate(window_ranges):
@@ -65,9 +41,7 @@ def occlusion(model, x: np.ndarray, baseline: np.ndarray = None, window_size: in
 
 
 def _predict_batch(model, X_batch: np.ndarray, original_shape: tuple, batch_size: int = 64) -> np.ndarray:
-    """Batched prediction for much better GPU utilization."""
     preds = []
-    
     is_torch = hasattr(model, 'parameters')
     has_embedding = is_torch and hasattr(model, 'embedding') and isinstance(model.embedding, nn.Embedding)
     
@@ -86,7 +60,6 @@ def _predict_batch(model, X_batch: np.ndarray, original_shape: tuple, batch_size
                         token_ids = token_ids.long().to(device)
                     else:
                         token_ids = batch_t.long().to(device)
-                    
                     padding_mask = (token_ids == 0)
                     pred = model(token_ids, padding_mask=padding_mask).cpu().numpy().flatten()
                 else:
@@ -102,7 +75,6 @@ def _predict_batch(model, X_batch: np.ndarray, original_shape: tuple, batch_size
 
 
 def lime_attributions(model, x: np.ndarray, n_samples: int = 50) -> np.ndarray:
-    """LIME attributions (LIM). Works for any model."""
     try:
         from lime import lime_tabular
     except ImportError:
@@ -129,26 +101,19 @@ def lime_attributions(model, x: np.ndarray, n_samples: int = 50) -> np.ndarray:
 
 
 def kernel_shap(model, x: np.ndarray, background: np.ndarray = None, n_samples: int = 30) -> np.ndarray:
-    """Kernel SHAP with timestep-level feature grouping for 2D input."""
     if x.ndim == 1:
         x_flat = x.reshape(1, -1)
-        
         if background is None:
             background = np.zeros_like(x_flat)
         
         def predict_fn(X):
-            preds = []
-            for xi in X:
-                preds.append(_predict(model, xi))
-            return np.array(preds)
+            return np.array([_predict(model, xi) for xi in X])
         
         explainer = shap.KernelExplainer(predict_fn, background)
         shap_values = explainer.shap_values(x_flat, nsamples=n_samples)
-        
         return shap_values[0]
     
     seq_len, num_features = x.shape
-    
     if background is None:
         background = np.zeros_like(x)
     
@@ -163,7 +128,6 @@ def kernel_shap(model, x: np.ndarray, background: np.ndarray = None, n_samples: 
         return np.array(preds)
     
     bg = np.zeros((1, seq_len))
-    
     explainer = shap.KernelExplainer(grouped_predict, bg)
     shap_values = explainer.shap_values(np.ones((1, seq_len)), nsamples=n_samples)
     
@@ -175,26 +139,19 @@ def kernel_shap(model, x: np.ndarray, background: np.ndarray = None, n_samples: 
     return expanded
 
 
-# =============================================================================
-# GRADIENT-BASED METHODS (Neural Networks)
-# =============================================================================
-
 def vanilla_gradient(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
-    """Vanilla Gradient / Saliency (VG)."""
     saliency = Saliency(model)
     attr = saliency.attribute(x, target=target_idx if x.dim() > 1 else None)
     return attr.detach().cpu().numpy()
 
 
 def input_x_gradient(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
-    """Input × Gradient (IxG)."""
     ixg = InputXGradient(model)
     attr = ixg.attribute(x, target=target_idx if x.dim() > 1 else None)
     return attr.detach().cpu().numpy()
 
 
 def guided_backprop(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
-    """Guided Backpropagation (GB)."""
     gbp = GuidedBackprop(model)
     attr = gbp.attribute(x, target=target_idx if x.dim() > 1 else None)
     return attr.detach().cpu().numpy()
@@ -202,7 +159,6 @@ def guided_backprop(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> n
 
 def integrated_gradients(model: nn.Module, x: torch.Tensor, baseline: torch.Tensor = None,
                          n_steps: int = 50, target_idx: int = 0) -> np.ndarray:
-    """Integrated Gradients (IG)."""
     if baseline is None:
         baseline = torch.zeros_like(x)
     
@@ -214,7 +170,6 @@ def integrated_gradients(model: nn.Module, x: torch.Tensor, baseline: torch.Tens
 
 def expected_gradients(model: nn.Module, x: torch.Tensor, background: torch.Tensor,
                        n_samples: int = 50, target_idx: int = 0) -> np.ndarray:
-    """Expected Gradients (EG) - GradientSHAP."""
     gs = GradientShap(model)
     attr = gs.attribute(x, baselines=background, n_samples=n_samples,
                         target=target_idx if x.dim() > 1 else None)
@@ -223,7 +178,6 @@ def expected_gradients(model: nn.Module, x: torch.Tensor, background: torch.Tens
 
 def deeplift(model: nn.Module, x: torch.Tensor, baseline: torch.Tensor = None,
              target_idx: int = 0) -> np.ndarray:
-    """DeepLIFT (DL) with improved stability for ResNets."""
     if baseline is None:
         baseline = torch.zeros_like(x)
     
@@ -232,8 +186,7 @@ def deeplift(model: nn.Module, x: torch.Tensor, baseline: torch.Tensor = None,
     try:
         attr = dl.attribute(x, baselines=baseline, target=target_idx if x.dim() > 1 else None)
         return attr.detach().cpu().numpy()
-    except Exception as e:
-        print(f"DeepLIFT failed, falling back to IG: {e}")
+    except Exception:
         ig = IntegratedGradients(model)
         attr = ig.attribute(x, baselines=baseline, target=target_idx if x.dim() > 1 else None)
         return attr.detach().cpu().numpy()
@@ -241,14 +194,12 @@ def deeplift(model: nn.Module, x: torch.Tensor, baseline: torch.Tensor = None,
 
 def deeplift_shap(model: nn.Module, x: torch.Tensor, background: torch.Tensor,
                   target_idx: int = 0) -> np.ndarray:
-    """DeepLIFT SHAP (DLS)."""
     dls = DeepLiftShap(model)
     attr = dls.attribute(x, baselines=background, target=target_idx if x.dim() > 1 else None)
     return attr.detach().cpu().numpy()
 
 
 def lrp(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
-    """Layer-wise Relevance Propagation (LRP)."""
     try:
         lrp_attr = CaptumLRP(model)
         attr = lrp_attr.attribute(x, target=target_idx if x.dim() > 1 else None)
@@ -257,13 +208,8 @@ def lrp(model: nn.Module, x: torch.Tensor, target_idx: int = 0) -> np.ndarray:
         return integrated_gradients(model, x, target_idx=target_idx)
 
 
-# =============================================================================
-# CAM METHODS (CNNs only)
-# =============================================================================
-
 def gradcam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
             target_idx: int = 0) -> np.ndarray:
-    """GradCAM (GC). Requires Conv layer. Supports 1D (time series) and 2D (images)."""
     gc = LayerGradCam(model, target_layer)
     attr = gc.attribute(x, target=target_idx if x.dim() > 1 else None)
     interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
@@ -273,10 +219,8 @@ def gradcam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
 
 def scorecam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
              target_idx: int = 0) -> np.ndarray:
-    """ScoreCAM (SC). Activation-weighted without gradients. Supports 1D and 2D."""
     model.eval()
     activations = []
-    
     interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
     
     def hook_fn(module, input, output):
@@ -317,11 +261,9 @@ def scorecam(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
 
 def gradcam_pp(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
                target_idx: int = 0) -> np.ndarray:
-    """GradCAM++ (GC++). Improved weighting. Supports 1D and 2D."""
     model.eval()
     activations = []
     gradients = []
-    
     interpolate_mode = 'linear' if x.dim() == 3 else 'bilinear'
     
     def forward_hook(module, input, output):
@@ -361,12 +303,7 @@ def gradcam_pp(model: nn.Module, x: torch.Tensor, target_layer: nn.Module,
     return cam.detach().cpu().numpy()
 
 
-# =============================================================================
-# ATTENTION METHODS (Transformers only)
-# =============================================================================
-
 def _prepare_transformer_input(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
-    """Prepare input for transformer models. Converts one-hot to token IDs if needed."""
     has_embedding = hasattr(model, 'embedding') and isinstance(model.embedding, nn.Embedding)
     
     if has_embedding:
@@ -387,9 +324,7 @@ def _prepare_transformer_input(model: nn.Module, x: torch.Tensor) -> torch.Tenso
 
 
 def raw_attention(model: nn.Module, x: torch.Tensor, layer_idx: int = -1) -> np.ndarray:
-    """Raw Attention weights (RA). Extracts from model.attention_weights."""
     model.eval()
-    
     x_prepared = _prepare_transformer_input(model, x)
     
     with torch.no_grad():
@@ -402,12 +337,7 @@ def raw_attention(model: nn.Module, x: torch.Tensor, layer_idx: int = -1) -> np.
     if not hasattr(model, 'attention_weights') or not model.attention_weights:
         return np.zeros(x.shape[-1] if x.dim() > 1 else len(x))
     
-    attention_weights = model.attention_weights
-    
-    if not attention_weights:
-        return np.zeros(x.shape[-1] if x.dim() > 1 else len(x))
-    
-    attn = attention_weights[layer_idx]
+    attn = model.attention_weights[layer_idx]
     attn_squeezed = attn.squeeze(0)
     
     if attn_squeezed.dim() > 1:
@@ -419,9 +349,7 @@ def raw_attention(model: nn.Module, x: torch.Tensor, layer_idx: int = -1) -> np.
 
 
 def rollout_attention(model: nn.Module, x: torch.Tensor) -> np.ndarray:
-    """Rollout Attention (RoA). Accumulated attention across layers."""
     model.eval()
-    
     x_prepared = _prepare_transformer_input(model, x)
     
     with torch.no_grad():
@@ -434,18 +362,11 @@ def rollout_attention(model: nn.Module, x: torch.Tensor) -> np.ndarray:
     if not hasattr(model, 'attention_weights') or not model.attention_weights:
         return np.zeros(x.shape[-1] if x.dim() > 1 else len(x))
     
-    attention_weights = model.attention_weights
-    
-    if not attention_weights:
-        return np.zeros(x.shape[-1] if x.dim() > 1 else len(x))
-    
     rollout = None
-    for attn in attention_weights:
+    for attn in model.attention_weights:
         attn_squeezed = attn.squeeze(0)
-        
         eye = torch.eye(attn_squeezed.shape[-1], device=attn_squeezed.device)
         attn_with_residual = 0.5 * attn_squeezed + 0.5 * eye
-        
         attn_normalized = attn_with_residual / (attn_with_residual.sum(dim=-1, keepdim=True) + 1e-8)
         
         if rollout is None:
@@ -457,12 +378,10 @@ def rollout_attention(model: nn.Module, x: torch.Tensor) -> np.ndarray:
         return np.zeros(x.shape[-1] if x.dim() > 1 else len(x))
     
     result = rollout[0] if rollout.dim() > 1 else rollout
-    
     return result.cpu().numpy()
 
 
 def lrp_attention(model: nn.Module, x: torch.Tensor, layer_idx: int = -1) -> np.ndarray:
-    """LRP-based Attention (LA). Combines LRP with attention."""
     attn = raw_attention(model, x, layer_idx)
     
     if np.all(attn == 0):
@@ -475,22 +394,13 @@ def lrp_attention(model: nn.Module, x: torch.Tensor, layer_idx: int = -1) -> np.
         if len(lrp_flat) == len(attn):
             combined = attn * np.abs(lrp_flat)
             return combined / (combined.sum() + 1e-8)
-        elif lrp_scores.shape[-1] == len(attn):
-            lrp_mean = np.abs(lrp_scores).mean(axis=tuple(range(lrp_scores.ndim - 1)))
-            combined = attn * lrp_mean
-            return combined / (combined.sum() + 1e-8)
     except Exception:
         pass
     
     return attn
 
 
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
 def _predict(model, x: np.ndarray) -> float:
-    """Predict with any model type. Handles GPU models, BERT/GPT token inputs, and CNNs."""
     if hasattr(model, 'predict'):
         x_input = x.flatten().reshape(1, -1) if x.ndim > 1 else x.reshape(1, -1)
         return float(model.predict(x_input)[0])
@@ -511,7 +421,6 @@ def _predict(model, x: np.ndarray) -> float:
                 out = model(token_ids, padding_mask=padding_mask)
         else:
             is_cnn = hasattr(model, 'stem') or hasattr(model, 'blocks')
-            
             x_tensor = torch.tensor(x, dtype=torch.float32)
             
             if is_cnn:
@@ -531,18 +440,6 @@ def _predict(model, x: np.ndarray) -> float:
 
 def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
                      model_type: str = 'tree', **kwargs) -> np.ndarray:
-    """Get attributions for any method and model type.
-    
-    Args:
-        model: The model to explain
-        x: Input sample (numpy array or torch tensor)
-        method: Method code (OC, LIM, KS, VG, IG, etc.)
-        model_type: One of 'tree', 'cnn', 'rnn', 'transformer'
-        **kwargs: Additional arguments for specific methods
-        
-    Returns:
-        Attribution array with same shape as input
-    """
     device = torch.device('cpu')
     if hasattr(model, 'parameters'):
         try:
@@ -552,7 +449,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
     
     has_embedding = hasattr(model, 'embedding') and isinstance(model.embedding, nn.Embedding)
     
-    # Universal methods
     if method == 'OC':
         return occlusion(model, x if isinstance(x, np.ndarray) else x.detach().cpu().numpy(), **kwargs)
     elif method == 'LIM':
@@ -562,7 +458,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
         x_np = x if isinstance(x, np.ndarray) else x.detach().cpu().numpy()
         return kernel_shap(model, x_np, **kwargs)
     
-    # Attention methods (Transformer only)
     if model_type == 'transformer' and method in ['RA', 'RoA', 'LA']:
         original_shape = x.shape if isinstance(x, np.ndarray) else x.cpu().numpy().shape
         
@@ -589,7 +484,6 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
             return expanded
         return attn_result
     
-    # Neural network methods (gradient-based)
     if model_type in ['transformer', 'rnn', 'cnn']:
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32).to(device)
@@ -620,16 +514,12 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
             elif method == 'GB':
                 result = guided_backprop(model, x)
             elif method == 'IG':
-                baseline = kwargs.get('baseline', None)
-                n_steps = kwargs.get('n_steps', 50)
-                result = integrated_gradients(model, x, baseline=baseline, n_steps=n_steps)
+                result = integrated_gradients(model, x, **kwargs)
             elif method == 'EG':
                 background = kwargs.get('background', torch.zeros_like(x).expand(10, *x.shape[1:]))
-                n_samples = kwargs.get('n_samples', 50)
-                result = expected_gradients(model, x, background=background, n_samples=n_samples)
+                result = expected_gradients(model, x, background=background, **kwargs)
             elif method == 'DL':
-                baseline = kwargs.get('baseline', None)
-                result = deeplift(model, x, baseline=baseline)
+                result = deeplift(model, x, **kwargs)
             elif method == 'DLS':
                 background = kwargs.get('background', torch.zeros_like(x).expand(10, *x.shape[1:]))
                 result = deeplift_shap(model, x, background=background)
@@ -650,48 +540,29 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
             if is_rnn and not was_training:
                 model.eval()
             return result
-        except Exception as e:
+        except Exception:
             if is_rnn and not was_training:
                 model.eval()
-            print(f"      Gradient method error ({method}): {type(e).__name__}: {str(e)[:80]}")
             return np.zeros(x.shape if isinstance(x, np.ndarray) else x.detach().cpu().numpy().shape)
     
-    # TreeSHAP for tree models (XGBoost)
     if model_type == 'tree' and method == 'TS':
         try:
-            import shap
             import re
-            
-            def parse_single_value(val):
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    pass
-                
-                val_str = str(val)
-                numbers = re.findall(r'-?\d+\.?\d*[eE][+-]?\d+|-?\d+\.?\d*', val_str)
-                if numbers:
-                    try:
-                        return float(numbers[0])
-                    except:
-                        pass
-                return 0.0
             
             def flatten_to_floats(obj):
                 result = []
-                
                 if hasattr(obj, 'values'):
                     obj = obj.values
-                
                 if hasattr(obj, 'tolist'):
                     obj = obj.tolist()
-                
                 if isinstance(obj, (list, tuple)):
                     for item in obj:
                         result.extend(flatten_to_floats(item))
                 else:
-                    result.append(parse_single_value(obj))
-                
+                    try:
+                        result.append(float(obj))
+                    except:
+                        result.append(0.0)
                 return result
             
             explainer = shap.TreeExplainer(model)
@@ -702,19 +573,16 @@ def get_attributions(model, x: Union[np.ndarray, torch.Tensor], method: str,
                 shap_output = shap_output[0]
             
             float_list = flatten_to_floats(shap_output)
-            
             result = np.array(float_list, dtype=np.float64)
             result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
             
             return result
-        except Exception as e:
-            print(f"      TreeSHAP error: {type(e).__name__}: {str(e)[:80]}")
+        except Exception:
             return np.zeros(x.flatten().shape)
     
     return np.zeros_like(x if isinstance(x, np.ndarray) else x.detach().cpu().numpy())
 
 
-# Method availability per model type
 METHODS_BY_TYPE = {
     'transformer': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'EG', 'DL', 'DLS', 'LRP', 'RA', 'RoA', 'LA'],
     'cnn': ['OC', 'LIM', 'KS', 'VG', 'IxG', 'GB', 'IG', 'EG', 'DL', 'DLS', 'LRP', 'GC', 'SC', 'GC++'],

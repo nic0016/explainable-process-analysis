@@ -1,5 +1,3 @@
-"""Evaluation metrics for XAI attributions: Faithfulness, Robustness, Complexity."""
-
 import numpy as np
 from scipy.stats import spearmanr
 from typing import Callable, Dict
@@ -7,18 +5,8 @@ import torch
 import torch.nn as nn
 
 
-# =============================================================================
-# FAITHFULNESS METRICS
-# =============================================================================
-
 def deletion_metric(model, x: np.ndarray, attributions: np.ndarray, 
                     baseline: np.ndarray = None, steps: int = 10) -> float:
-    """Remove features in order of importance, measure prediction drop.
-    
-    For regression: Returns normalized AUC where higher = better explanation.
-    The metric measures how much the prediction changes when important features are removed.
-    Range: [0, 1] where 1 means removing top features causes maximum prediction change.
-    """
     if baseline is None:
         baseline = np.zeros_like(x)
     
@@ -37,7 +25,6 @@ def deletion_metric(model, x: np.ndarray, attributions: np.ndarray,
         predictions.append(_predict(model, x_modified.reshape(x.shape)))
     
     pred_range = max(abs(original_pred), abs(predictions[-1] - original_pred), 1e-10)
-    
     total_drop = sum(abs(original_pred - p) for p in predictions) / (len(predictions) * pred_range)
     
     return min(1.0, max(0.0, total_drop))
@@ -45,12 +32,6 @@ def deletion_metric(model, x: np.ndarray, attributions: np.ndarray,
 
 def insertion_metric(model, x: np.ndarray, attributions: np.ndarray,
                      baseline: np.ndarray = None, steps: int = 10) -> float:
-    """Add features in order of importance, measure prediction gain.
-    
-    For regression: Returns normalized AUC where higher = better explanation.
-    Measures how quickly the prediction approaches the original when adding important features.
-    Range: [0, 1] where 1 means adding top features quickly recovers the original prediction.
-    """
     if baseline is None:
         baseline = np.zeros_like(x)
     
@@ -70,7 +51,6 @@ def insertion_metric(model, x: np.ndarray, attributions: np.ndarray,
         predictions.append(_predict(model, x_modified.reshape(x.shape)))
     
     pred_range = max(abs(original_pred - baseline_pred), 1e-10)
-    
     total_recovery = sum(1 - abs(original_pred - p) / pred_range for p in predictions) / len(predictions)
     
     return min(1.0, max(0.0, total_recovery))
@@ -78,14 +58,8 @@ def insertion_metric(model, x: np.ndarray, attributions: np.ndarray,
 
 def infidelity_metric(model, x: np.ndarray, attributions: np.ndarray,
                       n_perturbations: int = 50, sigma: float = 0.1) -> float:
-    """Measure if attributions explain prediction changes.
-    
-    Lower values = better (attributions accurately predict model behavior).
-    Normalized to typical range [0, 1].
-    """
     x_flat = x.flatten()
     attr_flat = attributions.flatten()
-    
     attr_norm = attr_flat / (np.linalg.norm(attr_flat) + 1e-10)
     
     original_pred = _predict(model, x)
@@ -107,7 +81,6 @@ def infidelity_metric(model, x: np.ndarray, attributions: np.ndarray,
 
 def faithfulness_correlation(model, x: np.ndarray, attributions: np.ndarray,
                              n_perturbations: int = 50) -> float:
-    """Correlation between attribution and actual prediction change."""
     x_flat = x.flatten()
     attr_flat = attributions.flatten()
     original_pred = _predict(model, x)
@@ -129,7 +102,6 @@ def faithfulness_correlation(model, x: np.ndarray, attributions: np.ndarray,
 
 
 def pixel_flipping(model, x: np.ndarray, attributions: np.ndarray, steps: int = 10) -> float:
-    """Flip top features and measure prediction change."""
     x_flat = x.flatten()
     attr_flat = attributions.flatten()
     sorted_idx = np.argsort(-np.abs(attr_flat))
@@ -150,13 +122,8 @@ def pixel_flipping(model, x: np.ndarray, attributions: np.ndarray, steps: int = 
     return np.mean(changes) if changes else 0.0
 
 
-# =============================================================================
-# ROBUSTNESS METRICS
-# =============================================================================
-
 def max_sensitivity(attr_func: Callable, x: np.ndarray, 
                     n_perturbations: int = 20, sigma: float = 0.01) -> float:
-    """Maximum change in attributions for small input perturbations."""
     x_flat = x.flatten()
     original_attr = attr_func(x).flatten()
     max_diff = 0.0
@@ -173,7 +140,6 @@ def max_sensitivity(attr_func: Callable, x: np.ndarray,
 
 def local_lipschitz(attr_func: Callable, x: np.ndarray,
                     n_perturbations: int = 20, sigma: float = 0.01) -> float:
-    """Estimate local Lipschitz constant of attribution function."""
     x_flat = x.flatten()
     original_attr = attr_func(x).flatten()
     lipschitz_vals = []
@@ -194,7 +160,6 @@ def local_lipschitz(attr_func: Callable, x: np.ndarray,
 
 def continuity_metric(attr_func: Callable, x: np.ndarray,
                       n_perturbations: int = 20, sigma: float = 0.01) -> float:
-    """Measure continuity of attributions with respect to input changes."""
     x_flat = x.flatten()
     original_attr = attr_func(x).flatten()
     attr_changes = []
@@ -213,27 +178,18 @@ def continuity_metric(attr_func: Callable, x: np.ndarray,
 
 def relative_stability(attr_func: Callable, model, x: np.ndarray,
                        n_perturbations: int = 20, sigma: float = 0.01) -> float:
-    """Relative stability: attribution change vs prediction change ratio.
-    
-    Lower values = more stable (attributions don't change much relative to predictions).
-    Normalized to typical range [0, 1].
-    """
     x_flat = x.flatten()
     original_attr = attr_func(x).flatten()
     original_pred = _predict(model, x)
     ratios = []
-    
-    preds = [original_pred]
     
     for _ in range(n_perturbations):
         noise = np.random.randn(len(x_flat)) * sigma
         perturbed = (x_flat + noise).reshape(x.shape)
         perturbed_attr = attr_func(perturbed).flatten()
         perturbed_pred = _predict(model, perturbed)
-        preds.append(perturbed_pred)
         
         attr_change = np.linalg.norm(original_attr - perturbed_attr) / (np.linalg.norm(original_attr) + 1e-10)
-        
         pred_diff = abs(original_pred - perturbed_pred)
         
         if pred_diff > 1e-10:
@@ -242,16 +198,10 @@ def relative_stability(attr_func: Callable, model, x: np.ndarray,
     if not ratios:
         return 0.0
     
-    median_ratio = np.median(ratios)
-    return min(1.0, median_ratio / 10.0)
+    return min(1.0, np.median(ratios) / 10.0)
 
-
-# =============================================================================
-# COMPLEXITY METRICS
-# =============================================================================
 
 def sparseness(attributions: np.ndarray, threshold: float = 0.01) -> float:
-    """Fraction of attributions below threshold (higher = sparser)."""
     abs_attr = np.abs(attributions.flatten())
     max_attr = np.max(abs_attr) + 1e-10
     normalized = abs_attr / max_attr
@@ -259,7 +209,6 @@ def sparseness(attributions: np.ndarray, threshold: float = 0.01) -> float:
 
 
 def effective_complexity(attributions: np.ndarray, threshold: float = 0.01) -> float:
-    """Number of features with significant attributions."""
     abs_attr = np.abs(attributions.flatten())
     max_attr = np.max(abs_attr) + 1e-10
     normalized = abs_attr / max_attr
@@ -267,23 +216,16 @@ def effective_complexity(attributions: np.ndarray, threshold: float = 0.01) -> f
 
 
 def gini_coefficient(attributions: np.ndarray) -> float:
-    """Gini coefficient of attributions (inequality measure)."""
     abs_attr = np.abs(attributions.flatten())
     if np.sum(abs_attr) == 0:
         return 0.0
     
     sorted_attr = np.sort(abs_attr)
     n = len(sorted_attr)
-    cumulative = np.cumsum(sorted_attr)
     return (2 * np.sum((np.arange(1, n+1) * sorted_attr)) / (n * np.sum(sorted_attr))) - (n + 1) / n
 
 
-# =============================================================================
-# HELPER AND AGGREGATION
-# =============================================================================
-
 def _predict(model, x: np.ndarray) -> float:
-    """Predict with any model type. Handles GPU models, BERT/GPT token inputs, and CNNs."""
     try:
         if hasattr(model, 'predict'):
             x_input = x.flatten().reshape(1, -1) if x.ndim > 1 else x.reshape(1, -1)
@@ -305,7 +247,6 @@ def _predict(model, x: np.ndarray) -> float:
                     out = model(token_ids, padding_mask=padding_mask)
             else:
                 is_cnn = hasattr(model, 'stem') or hasattr(model, 'blocks')
-                
                 x_tensor = torch.tensor(x, dtype=torch.float32)
                 
                 if is_cnn:
@@ -332,11 +273,9 @@ def _predict(model, x: np.ndarray) -> float:
 
 def compute_all_metrics(model, x: np.ndarray, attributions: np.ndarray,
                         attr_func: Callable = None) -> Dict[str, float]:
-    """Compute all metrics for given attributions. Each metric is computed in try-except."""
     results = {}
     
-    def safe_compute(name: str, func: Callable, *args, **kwargs) -> float:
-        """Safely compute a metric, returning NaN on error."""
+    def safe_compute(func, *args, **kwargs):
         try:
             val = func(*args, **kwargs)
             if val is None or (isinstance(val, float) and (np.isnan(val) or np.isinf(val))):
@@ -345,24 +284,21 @@ def compute_all_metrics(model, x: np.ndarray, attributions: np.ndarray,
         except Exception:
             return np.nan
     
-    # Faithfulness
-    results['deletion'] = safe_compute('deletion', deletion_metric, model, x, attributions)
-    results['insertion'] = safe_compute('insertion', insertion_metric, model, x, attributions)
-    results['infidelity'] = safe_compute('infidelity', infidelity_metric, model, x, attributions)
-    results['faith_corr'] = safe_compute('faith_corr', faithfulness_correlation, model, x, attributions)
-    results['pixel_flip'] = safe_compute('pixel_flip', pixel_flipping, model, x, attributions)
+    results['deletion'] = safe_compute(deletion_metric, model, x, attributions)
+    results['insertion'] = safe_compute(insertion_metric, model, x, attributions)
+    results['infidelity'] = safe_compute(infidelity_metric, model, x, attributions)
+    results['faith_corr'] = safe_compute(faithfulness_correlation, model, x, attributions)
+    results['pixel_flip'] = safe_compute(pixel_flipping, model, x, attributions)
     
-    # Robustness (requires attr_func)
     if attr_func is not None:
-        results['max_sens'] = safe_compute('max_sens', max_sensitivity, attr_func, x)
-        results['lipschitz'] = safe_compute('lipschitz', local_lipschitz, attr_func, x)
-        results['continuity'] = safe_compute('continuity', continuity_metric, attr_func, x)
-        results['rel_stability'] = safe_compute('rel_stability', relative_stability, attr_func, model, x)
+        results['max_sens'] = safe_compute(max_sensitivity, attr_func, x)
+        results['lipschitz'] = safe_compute(local_lipschitz, attr_func, x)
+        results['continuity'] = safe_compute(continuity_metric, attr_func, x)
+        results['rel_stability'] = safe_compute(relative_stability, attr_func, model, x)
     
-    # Complexity
-    results['sparseness'] = safe_compute('sparseness', sparseness, attributions)
-    results['eff_complexity'] = safe_compute('eff_complexity', effective_complexity, attributions)
-    results['gini'] = safe_compute('gini', gini_coefficient, attributions)
+    results['sparseness'] = safe_compute(sparseness, attributions)
+    results['eff_complexity'] = safe_compute(effective_complexity, attributions)
+    results['gini'] = safe_compute(gini_coefficient, attributions)
     
     return results
 

@@ -1,12 +1,8 @@
-"""Lightweight Temporal Fusion Transformer for sequence regression."""
-
 import torch
 import torch.nn as nn
 
 
 class GatedResidualNetwork(nn.Module):
-    """Gated Residual Network (GRN) component for TFT."""
-    
     def __init__(self, d_in: int, d_hidden: int):
         super().__init__()
         self.net = nn.Sequential(
@@ -27,19 +23,8 @@ class GatedResidualNetwork(nn.Module):
 
 
 class LightTFTRegressor(nn.Module):
-    """
-    Lightweight Temporal Fusion Transformer for sequence regression.
-    
-    Combines bidirectional LSTM, temporal attention (TransformerEncoder), 
-    Gated Residual Network (GRN), and regression head.
-    
-    Input: x_tokens [N, L, M] where L = sequence length, M = input_size
-    Output: [N, 1] regression values
-    """
-    
     def __init__(self, input_size: int, d_model: int = 128, nhead: int = 4, num_layers: int = 2):
         super().__init__()
-        # Simple LSTM backbone
         self.lstm = nn.LSTM(
             input_size=input_size, 
             hidden_size=d_model // 2, 
@@ -47,10 +32,8 @@ class LightTFTRegressor(nn.Module):
             bidirectional=True, 
             batch_first=True
         )
-        # Multi-head attention (temporal)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.temporal_attn = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        # Gated residual network on pooled representation
         self.grn = GatedResidualNetwork(d_in=d_model, d_hidden=d_model)
         self.head = nn.Sequential(
             nn.Linear(d_model, d_model),
@@ -58,9 +41,8 @@ class LightTFTRegressor(nn.Module):
             nn.Linear(d_model, 1),
         )
 
-    def forward(self, x_tokens: torch.Tensor, padding_mask: torch.Tensor | None = None) -> torch.Tensor:
-        # x_tokens: [N, L, M]
-        y, _ = self.lstm(x_tokens)
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor | None = None) -> torch.Tensor:
+        y, _ = self.lstm(x)
         y = self.temporal_attn(y, src_key_padding_mask=padding_mask)
         pooled = y.mean(dim=1)
         pooled = self.grn(pooled)

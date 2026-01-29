@@ -1,5 +1,3 @@
-"""Data loading and encoding module for XES event logs."""
-
 from .loader import (
     create_eventlog,
     build_dataframe,

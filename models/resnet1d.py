@@ -1,12 +1,8 @@
-"""1D ResNet for time series regression."""
-
 import torch
 import torch.nn as nn
 
 
 class BasicBlock1D(nn.Module):
-    """Basic residual block for 1D convolutions."""
-    
     def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
         padding = kernel_size // 2
@@ -29,13 +25,6 @@ class BasicBlock1D(nn.Module):
 
 
 class SmallResNet1D(nn.Module):
-    """
-    Small 1D ResNet for sequence regression.
-    
-    Input: [N, C, L] where C = in_channels, L = sequence length
-    Output: [N, 1] regression values
-    """
-    
     def __init__(self, in_channels: int, hidden_channels: int = 64, num_blocks: int = 3):
         super().__init__()
         self.stem = nn.Sequential(
