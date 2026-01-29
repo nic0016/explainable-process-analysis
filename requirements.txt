@@ -1,0 +1,29 @@
+# Core ML/DL
+torch>=2.0.0
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+scipy>=1.7.0
+
+# XGBoost
+xgboost>=1.5.0
+
+# Process Mining
+pm4py>=2.3.0
+
+# Explainability
+shap>=0.41.0
+lime>=0.2.0
+captum>=0.6.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Utilities
+psutil>=5.8.0
+tqdm>=4.62.0
+
+# Jupyter (optional, for notebooks)
+jupyter>=1.0.0
+ipykernel>=6.0.0
